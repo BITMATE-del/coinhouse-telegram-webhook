@@ -5,6 +5,7 @@ const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const JOIN_URL = process.env.JOIN_URL || "";
 const GUIDE_URL = process.env.GUIDE_URL || "";
 const BASE_CAPITAL_KRW = Number(process.env.BASE_CAPITAL_KRW || "10000000");
+const LEVERAGE = Number(process.env.LEVERAGE || "20");
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000;
 
@@ -126,6 +127,15 @@ function getKrwAmount(percent) {
   return BASE_CAPITAL_KRW * (pct / 100);
 }
 
+function applyLeverage(percent) {
+  const pct = toNumber(percent);
+  if (pct === null || !Number.isFinite(LEVERAGE) || LEVERAGE <= 0) {
+    return null;
+  }
+
+  return pct * LEVERAGE;
+}
+
 function getMetrics(data) {
   const direction = getDirection(data);
   const entry = toNumber(data.entry);
@@ -147,6 +157,11 @@ function getMetrics(data) {
       ? Math.abs(target2Return) / stopLossPct
       : null;
 
+  const currentLeveragedReturn = applyLeverage(currentReturn);
+  const target1LeveragedReturn = applyLeverage(target1Return);
+  const target2LeveragedReturn = applyLeverage(target2Return);
+  const stopLeveragedLossPct = applyLeverage(stopLossPct);
+
   return {
     direction,
     entry,
@@ -159,10 +174,14 @@ function getMetrics(data) {
     target2Return,
     stopLossPct,
     rewardRisk,
-    currentKrw: getKrwAmount(currentReturn),
-    target1Krw: getKrwAmount(target1Return),
-    target2Krw: getKrwAmount(target2Return),
-    stopKrw: stopLossPct === null ? null : -Math.abs(getKrwAmount(stopLossPct)),
+    currentLeveragedReturn,
+    target1LeveragedReturn,
+    target2LeveragedReturn,
+    stopLeveragedLossPct,
+    currentKrw: getKrwAmount(currentLeveragedReturn),
+    target1Krw: getKrwAmount(target1LeveragedReturn),
+    target2Krw: getKrwAmount(target2LeveragedReturn),
+    stopKrw: stopLeveragedLossPct === null ? null : -Math.abs(getKrwAmount(stopLeveragedLossPct)),
   };
 }
 
@@ -219,7 +238,7 @@ function getHeader(event) {
 
 function getStatusText(data, metrics) {
   if (data.event === "target1") {
-    const pct = metrics.target1Return;
+    const pct = metrics.target1LeveragedReturn;
     const won = metrics.target1Krw;
     const detail = pct === null
       ? ""
@@ -231,7 +250,7 @@ function getStatusText(data, metrics) {
   }
 
   if (data.event === "target2") {
-    const pct = metrics.target2Return;
+    const pct = metrics.target2LeveragedReturn;
     const won = metrics.target2Krw;
     const detail = pct === null
       ? ""
@@ -243,7 +262,7 @@ function getStatusText(data, metrics) {
   }
 
   if (data.event === "stop") {
-    const pct = metrics.stopLossPct;
+    const pct = metrics.stopLeveragedLossPct;
     const won = metrics.stopKrw;
     const detail = pct === null
       ? ""
@@ -281,9 +300,9 @@ function buildPerformanceBlock(data, metrics) {
 
   if (metrics.target1 !== null) {
     const pct =
-      metrics.target1Return === null
+      metrics.target1LeveragedReturn === null
         ? ""
-        : `  <b>(${escapeHtml(formatPercent(metrics.target1Return, true))})</b>`;
+        : `  <b>(${escapeHtml(formatPercent(metrics.target1LeveragedReturn, true))})</b>`;
 
     const won =
       metrics.target1Krw === null
@@ -297,9 +316,9 @@ function buildPerformanceBlock(data, metrics) {
 
   if (metrics.target2 !== null) {
     const pct =
-      metrics.target2Return === null
+      metrics.target2LeveragedReturn === null
         ? ""
-        : `  <b>(${escapeHtml(formatPercent(metrics.target2Return, true))})</b>`;
+        : `  <b>(${escapeHtml(formatPercent(metrics.target2LeveragedReturn, true))})</b>`;
 
     const won =
       metrics.target2Krw === null
@@ -313,9 +332,9 @@ function buildPerformanceBlock(data, metrics) {
 
   if (metrics.stop !== null) {
     const pct =
-      metrics.stopLossPct === null
+      metrics.stopLeveragedLossPct === null
         ? ""
-        : `  <b>(-${metrics.stopLossPct.toFixed(2)}%)</b>`;
+        : `  <b>(-${metrics.stopLeveragedLossPct.toFixed(2)}%)</b>`;
 
     const won =
       metrics.stopKrw === null
@@ -327,14 +346,14 @@ function buildPerformanceBlock(data, metrics) {
     );
   }
 
-  if (metrics.currentReturn !== null) {
+  if (metrics.currentLeveragedReturn !== null) {
     const won =
       metrics.currentKrw === null
         ? ""
         : `  ·  <b>${escapeHtml(formatKrw(metrics.currentKrw))}</b>`;
 
     lines.push(
-      `현재 기준   <b>${escapeHtml(formatPercent(metrics.currentReturn, true))}</b>${won}`
+      `현재 기준   <b>${escapeHtml(formatPercent(metrics.currentLeveragedReturn, true))}</b>${won}`
     );
   }
 
@@ -348,7 +367,7 @@ function buildPerformanceBlock(data, metrics) {
 
   const capitalLine =
     Number.isFinite(BASE_CAPITAL_KRW) && BASE_CAPITAL_KRW > 0
-      ? `\n기준금액   <b>${escapeHtml(formatKrw(BASE_CAPITAL_KRW))}</b>`
+      ? `\n기준금액   <b>${escapeHtml(formatKrw(BASE_CAPITAL_KRW))}</b>\n레버리지   <b>${escapeHtml(String(LEVERAGE))}배</b>`
       : "";
 
   return `📌 <b>신호 정보</b>
@@ -373,7 +392,7 @@ ${performance ? performance + "\n\n" : ""}💡 <b>COINHOUSE AI 분석</b>
 ${statusText}
 
 ━━━━━━━━━━━━━━
-※ 수익·손실 금액은 기준금액으로 단순 환산한 예상치이며 수수료·슬리피지는 반영하지 않습니다.
+※ 수익·손실은 레버리지 ${LEVERAGE}배를 단순 적용한 예상치이며 수수료·펀딩비·슬리피지·강제청산 조건은 반영하지 않습니다.
 ※ 신호 강도는 조건 충족도이며 성공 확률을 의미하지 않습니다.
 
 #COINHOUSE #MarketIntelligence`;
@@ -415,7 +434,7 @@ export default async function handler(req, res) {
       ok: true,
       service: "COINHOUSE Telegram Webhook",
       status: "running",
-      version: "1.4",
+      version: "1.5",
     });
   }
 
