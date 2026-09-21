@@ -4,6 +4,7 @@ const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
 const JOIN_URL = process.env.JOIN_URL || "";
 const GUIDE_URL = process.env.GUIDE_URL || "";
+const BASE_CAPITAL_KRW = Number(process.env.BASE_CAPITAL_KRW || "10000000");
 
 const DEDUP_WINDOW_MS = 2 * 60 * 1000;
 
@@ -43,6 +44,13 @@ function formatPrice(value) {
   });
 }
 
+function formatKrw(value) {
+  const number = toNumber(value);
+  if (number === null) return "-";
+
+  return Math.round(number).toLocaleString("ko-KR") + "원";
+}
+
 function formatPercent(value, signed = false) {
   const number = toNumber(value);
   if (number === null) return "-";
@@ -75,6 +83,9 @@ function formatTimeframe(value) {
 }
 
 function getDirection(data) {
+  if (data.event === "buy_signal") return "LONG";
+  if (data.event === "sell_signal") return "SHORT";
+
   const entry = toNumber(data.entry);
   const target1 = toNumber(data.target1);
   const stop = toNumber(data.stop);
@@ -89,9 +100,6 @@ function getDirection(data) {
     if (stop > entry) return "SHORT";
   }
 
-  if (data.event === "buy_signal") return "LONG";
-  if (data.event === "sell_signal") return "SHORT";
-
   return null;
 }
 
@@ -105,6 +113,17 @@ function getReturnPercent(direction, entry, value) {
   }
 
   return ((entry - value) / entry) * 100;
+}
+
+function getKrwAmount(percent) {
+  if (!Number.isFinite(BASE_CAPITAL_KRW) || BASE_CAPITAL_KRW <= 0) {
+    return null;
+  }
+
+  const pct = toNumber(percent);
+  if (pct === null) return null;
+
+  return BASE_CAPITAL_KRW * (pct / 100);
 }
 
 function getMetrics(data) {
@@ -140,6 +159,10 @@ function getMetrics(data) {
     target2Return,
     stopLossPct,
     rewardRisk,
+    currentKrw: getKrwAmount(currentReturn),
+    target1Krw: getKrwAmount(target1Return),
+    target2Krw: getKrwAmount(target2Return),
+    stopKrw: stopLossPct === null ? null : -Math.abs(getKrwAmount(stopLossPct)),
   };
 }
 
@@ -194,27 +217,58 @@ function getHeader(event) {
   return headers[event] || "📊 <b>COINHOUSE Market Intelligence AI</b>";
 }
 
-function getStatusText(event) {
-  const messages = {
-    buy_signal:
-      "상승 방향 조건이 충족되어 매수 신호가 확인되었습니다.",
-    sell_signal:
-      "하락 방향 조건이 충족되어 매도 신호가 확인되었습니다.",
-    target1:
-      "1차 목표지점에 도달했습니다. 다음 목표와 현재 흐름을 확인해주세요.",
-    target2:
-      "2차 목표지점 도달이 확인되었습니다. 수익 구간 관리에 유의해주세요.",
-    stop:
-      "손절 지점에 도달해 해당 신호 추적을 종료합니다.",
-    exit_warning:
-      "진행 중인 신호에서 모멘텀 약화가 감지되었습니다.",
-  };
+function getStatusText(data, metrics) {
+  if (data.event === "target1") {
+    const pct = metrics.target1Return;
+    const won = metrics.target1Krw;
+    const detail = pct === null
+      ? ""
+      : `\n현재 1차 목표 기준 수익률은 <b>${escapeHtml(formatPercent(pct, true))}</b>${won === null ? "" : `, 기준금액 예상 수익은 <b>${escapeHtml(formatKrw(won))}</b>`}입니다.`;
 
-  return messages[event] || "새로운 시장 이벤트가 감지되었습니다.";
+    return `🎉 <b>1차 목표 달성을 축하드립니다.</b>
+신호가 1차 목표지점에 도달했습니다.${detail}
+다음 목표지점과 시장 흐름을 확인해주세요.`;
+  }
+
+  if (data.event === "target2") {
+    const pct = metrics.target2Return;
+    const won = metrics.target2Krw;
+    const detail = pct === null
+      ? ""
+      : `\n현재 2차 목표 기준 수익률은 <b>${escapeHtml(formatPercent(pct, true))}</b>${won === null ? "" : `, 기준금액 예상 수익은 <b>${escapeHtml(formatKrw(won))}</b>`}입니다.`;
+
+    return `🏆 <b>2차 목표 달성을 축하드립니다.</b>
+신호가 2차 목표지점에 도달했습니다.${detail}
+수익 구간 관리에 유의해주세요.`;
+  }
+
+  if (data.event === "stop") {
+    const pct = metrics.stopLossPct;
+    const won = metrics.stopKrw;
+    const detail = pct === null
+      ? ""
+      : `\n기준 손실률은 <b>-${pct.toFixed(2)}%</b>${won === null ? "" : `, 기준금액 예상 손실은 <b>${escapeHtml(formatKrw(won))}</b>`}입니다.`;
+
+    return `손절 지점에 도달해 해당 신호 추적을 종료합니다.${detail}
+새로운 신호가 확인될 때까지 대기해주세요.`;
+  }
+
+  if (data.event === "buy_signal") {
+    return "상승 방향 조건이 충족되어 매수 신호가 확인되었습니다.";
+  }
+
+  if (data.event === "sell_signal") {
+    return "하락 방향 조건이 충족되어 매도 신호가 확인되었습니다.";
+  }
+
+  if (data.event === "exit_warning") {
+    return "진행 중인 신호에서 모멘텀 약화가 감지되었습니다. 수익 구간 관리에 유의해주세요.";
+  }
+
+  return "새로운 시장 이벤트가 감지되었습니다.";
 }
 
-function buildPerformanceBlock(data) {
-  const metrics = getMetrics(data);
+function buildPerformanceBlock(data, metrics) {
   const lines = [];
 
   if (hasValue(data.strength)) {
@@ -231,8 +285,13 @@ function buildPerformanceBlock(data) {
         ? ""
         : `  <b>(${escapeHtml(formatPercent(metrics.target1Return, true))})</b>`;
 
+    const won =
+      metrics.target1Krw === null
+        ? ""
+        : `  ·  예상 <b>${escapeHtml(formatKrw(metrics.target1Krw))}</b>`;
+
     lines.push(
-      `1차 목표   <b>${escapeHtml(formatPrice(metrics.target1))}</b>${pct}`
+      `1차 목표   <b>${escapeHtml(formatPrice(metrics.target1))}</b>${pct}${won}`
     );
   }
 
@@ -242,8 +301,13 @@ function buildPerformanceBlock(data) {
         ? ""
         : `  <b>(${escapeHtml(formatPercent(metrics.target2Return, true))})</b>`;
 
+    const won =
+      metrics.target2Krw === null
+        ? ""
+        : `  ·  예상 <b>${escapeHtml(formatKrw(metrics.target2Krw))}</b>`;
+
     lines.push(
-      `2차 목표   <b>${escapeHtml(formatPrice(metrics.target2))}</b>${pct}`
+      `2차 목표   <b>${escapeHtml(formatPrice(metrics.target2))}</b>${pct}${won}`
     );
   }
 
@@ -253,14 +317,24 @@ function buildPerformanceBlock(data) {
         ? ""
         : `  <b>(-${metrics.stopLossPct.toFixed(2)}%)</b>`;
 
+    const won =
+      metrics.stopKrw === null
+        ? ""
+        : `  ·  예상 <b>${escapeHtml(formatKrw(metrics.stopKrw))}</b>`;
+
     lines.push(
-      `손절 지점   <b>${escapeHtml(formatPrice(metrics.stop))}</b>${pct}`
+      `손절 지점   <b>${escapeHtml(formatPrice(metrics.stop))}</b>${pct}${won}`
     );
   }
 
   if (metrics.currentReturn !== null) {
+    const won =
+      metrics.currentKrw === null
+        ? ""
+        : `  ·  <b>${escapeHtml(formatKrw(metrics.currentKrw))}</b>`;
+
     lines.push(
-      `현재 기준   <b>${escapeHtml(formatPercent(metrics.currentReturn, true))}</b>`
+      `현재 기준   <b>${escapeHtml(formatPercent(metrics.currentReturn, true))}</b>${won}`
     );
   }
 
@@ -272,17 +346,23 @@ function buildPerformanceBlock(data) {
 
   if (!lines.length) return "";
 
+  const capitalLine =
+    Number.isFinite(BASE_CAPITAL_KRW) && BASE_CAPITAL_KRW > 0
+      ? `\n기준금액   <b>${escapeHtml(formatKrw(BASE_CAPITAL_KRW))}</b>`
+      : "";
+
   return `📌 <b>신호 정보</b>
 ━━━━━━━━━━━━━━
-${lines.join("\n")}`;
+${lines.join("\n")}${capitalLine}`;
 }
 
 function getMessage(data) {
   const symbol = escapeHtml(data.symbol || "종목 미확인");
   const timeframe = escapeHtml(formatTimeframe(data.timeframe));
   const price = escapeHtml(formatPrice(data.price));
-  const performance = buildPerformanceBlock(data);
-  const statusText = getStatusText(data.event);
+  const metrics = getMetrics(data);
+  const performance = buildPerformanceBlock(data, metrics);
+  const statusText = getStatusText(data, metrics);
 
   return `${getHeader(data.event)}
 
@@ -293,6 +373,7 @@ ${performance ? performance + "\n\n" : ""}💡 <b>COINHOUSE AI 분석</b>
 ${statusText}
 
 ━━━━━━━━━━━━━━
+※ 수익·손실 금액은 기준금액으로 단순 환산한 예상치이며 수수료·슬리피지는 반영하지 않습니다.
 ※ 신호 강도는 조건 충족도이며 성공 확률을 의미하지 않습니다.
 
 #COINHOUSE #MarketIntelligence`;
@@ -334,7 +415,7 @@ export default async function handler(req, res) {
       ok: true,
       service: "COINHOUSE Telegram Webhook",
       status: "running",
-      version: "1.3",
+      version: "1.4",
     });
   }
 
