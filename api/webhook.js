@@ -7,7 +7,10 @@ const GUIDE_URL = process.env.GUIDE_URL || "";
 const BASE_CAPITAL_KRW = Number(process.env.BASE_CAPITAL_KRW || "10000000");
 const LEVERAGE = Number(process.env.LEVERAGE || "20");
 
-const DEDUP_WINDOW_MS = 2 * 60 * 1000;
+const DEDUP_WINDOW_MS = 10 * 60 * 1000;
+
+const DEDUP_API_URL = "https://fgyiofykvpkxpeylcocn.supabase.co/rest/v1/rpc/claim_coinhouse_signal";
+const DEDUP_API_KEY = "sb_publishable_a7YWOaS5bhOcoHqHMpunKQ_-Nm-2pOC";
 
 if (!globalThis.__coinhouseDedupCache) {
   globalThis.__coinhouseDedupCache = new Map();
@@ -208,12 +211,43 @@ function getDedupKey(data) {
   ].join("|");
 }
 
-function isDuplicate(data) {
+async function isDuplicate(data) {
   cleanupDedupCache();
 
   const key = getDedupKey(data);
   const now = Date.now();
   const lastSeen = dedupCache.get(key);
+
+  if (lastSeen && now - lastSeen < DEDUP_WINDOW_MS) {
+    return true;
+  }
+
+  try {
+    const response = await fetch(DEDUP_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": DEDUP_API_KEY,
+        "Authorization": `Bearer ${DEDUP_API_KEY}`,
+      },
+      body: JSON.stringify({ p_event_key: key }),
+    });
+
+    if (response.ok) {
+      const claimed = await response.json();
+
+      if (claimed === false) {
+        return true;
+      }
+
+      dedupCache.set(key, now);
+      return false;
+    }
+
+    console.error("Persistent dedup API error:", await response.text());
+  } catch (error) {
+    console.error("Persistent dedup request failed:", error);
+  }
 
   if (lastSeen && now - lastSeen < DEDUP_WINDOW_MS) {
     return true;
@@ -395,7 +429,9 @@ ${statusText}
 ※ 수익·손실은 레버리지 ${LEVERAGE}배를 단순 적용한 예상치이며 수수료·펀딩비·슬리피지·강제청산 조건은 반영하지 않습니다.
 ※ 신호 강도는 조건 충족도이며 성공 확률을 의미하지 않습니다.
 
-#COINHOUSE #MarketIntelligence`;
+#COINHOUSE #MarketIntelligence
+
+<code>CORE</code>`;
 }
 
 function getReplyMarkup() {
@@ -434,7 +470,7 @@ export default async function handler(req, res) {
       ok: true,
       service: "COINHOUSE Telegram Webhook",
       status: "running",
-      version: "1.5",
+      version: "1.6",
     });
   }
 
@@ -476,7 +512,7 @@ export default async function handler(req, res) {
       });
     }
 
-    if (isDuplicate(data)) {
+    if (await isDuplicate(data)) {
       console.log("Duplicate COINHOUSE alert ignored:", {
         event: data.event,
         symbol: data.symbol,
