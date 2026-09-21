@@ -7,6 +7,41 @@ const CRON_SECRET = process.env.CRON_SECRET;
 if (!globalThis.__coinhouseNewsCache) globalThis.__coinhouseNewsCache = new Map();
 const sentCache = globalThis.__coinhouseNewsCache;
 
+const KEYWORDS = [
+  ["bitcoin etf", 40],
+  ["spot etf", 35],
+  ["fomc", 35],
+  ["federal reserve", 35],
+  ["rate cut", 30],
+  ["rate hike", 30],
+  ["sec", 25],
+  ["cpi", 30],
+  ["pce", 25],
+  ["inflation", 20],
+  ["hack", 35],
+  ["hacked", 35],
+  ["exploit", 35],
+  ["liquidation", 25],
+  ["bankruptcy", 30],
+  ["blackrock", 25],
+  ["binance", 20],
+  ["coinbase", 20],
+  ["bitcoin", 20],
+  ["ethereum", 15],
+  ["crypto", 10],
+];
+
+const SOURCE_BONUS = {
+  Reuters: 25,
+  Bloomberg: 25,
+  CNBC: 20,
+  "Associated Press": 20,
+  "The Wall Street Journal": 20,
+  "Financial Times": 20,
+  CoinDesk: 15,
+  Cointelegraph: 10,
+};
+
 function esc(v = "") {
   return String(v)
     .replaceAll("&", "&amp;")
@@ -19,6 +54,50 @@ function authorized(req) {
   if (CRON_SECRET && auth === `Bearer ${CRON_SECRET}`) return true;
   if (WEBHOOK_SECRET && req.headers["x-news-secret"] === WEBHOOK_SECRET) return true;
   return false;
+}
+
+function articleScore(article) {
+  const text = `${article.title || ""} ${article.description || ""}`.toLowerCase();
+  let score = 0;
+
+  for (const [keyword, points] of KEYWORDS) {
+    if (text.includes(keyword)) score += points;
+  }
+
+  score += SOURCE_BONUS[article.source?.name] || 0;
+
+  const published = Date.parse(article.publishedAt || "");
+  if (Number.isFinite(published)) {
+    const ageMin = (Date.now() - published) / 60000;
+    if (ageMin <= 10) score += 15;
+    else if (ageMin <= 20) score += 8;
+  }
+
+  return Math.min(score, 100);
+}
+
+function impactLabel(score) {
+  if (score >= 90) return "매우 높음";
+  if (score >= 80) return "높음";
+  return "주요";
+}
+
+function marketCheck(article) {
+  const text = `${article.title || ""} ${article.description || ""}`.toLowerCase();
+
+  if (/(hack|hacked|exploit|bankruptcy|liquidation)/.test(text)) {
+    return "보안·청산 이슈로 단기 변동성이 커질 수 있어 가격 움직임에 유의해주세요.";
+  }
+
+  if (/(fomc|federal reserve|rate cut|rate hike|cpi|pce|inflation)/.test(text)) {
+    return "거시경제 뉴스로 BTC와 주요 알트코인의 변동성 확대 가능성을 확인해주세요.";
+  }
+
+  if (/(etf|sec|blackrock)/.test(text)) {
+    return "기관 수급과 규제 기대 변화가 시장 심리에 영향을 줄 수 있습니다.";
+  }
+
+  return "뉴스 발표 직후 가격 반응과 거래량 변화를 함께 확인해주세요.";
 }
 
 function isDuplicate(article) {
@@ -34,7 +113,7 @@ function isDuplicate(article) {
   return false;
 }
 
-async function sendTelegram(article) {
+async function sendTelegram(article, score) {
   const title = esc(article.title || "제목 없음");
   const source = esc(article.source?.name || "출처 미상");
   const summary = esc(
@@ -50,10 +129,15 @@ async function sendTelegram(article) {
     disable_web_page_preview: false,
     text: `🚨 <b>COINHOUSE 주요 뉴스</b>
 
+시장 영향도  <b>${impactLabel(score)}</b> · ${score}점
+
 📰 <b>${title}</b>
 
 <b>핵심 내용</b>
 ${summary}
+
+💡 <b>COINHOUSE 시장 체크</b>
+${marketCheck(article)}
 
 출처  <b>${source}</b>
 발행  ${published}
@@ -86,7 +170,7 @@ export default async function handler(req, res) {
       ok: true,
       service: "COINHOUSE News Monitor",
       status: "running",
-      version: "1.0",
+      version: "1.1",
     });
   }
 
@@ -110,7 +194,7 @@ export default async function handler(req, res) {
       searchIn: "title,description",
       language: "en",
       sortBy: "publishedAt",
-      pageSize: "30",
+      pageSize: "40",
       from,
     });
 
@@ -130,17 +214,24 @@ export default async function handler(req, res) {
     }
 
     const picked = (j.articles || [])
-      .filter((a) => !isDuplicate(a))
+      .map((article) => ({ article, score: articleScore(article) }))
+      .filter(({ article, score }) => score >= 70 && !isDuplicate(article))
+      .sort((a, b) => b.score - a.score)
       .slice(0, 2);
 
-    for (const article of picked) {
-      await sendTelegram(article);
+    for (const { article, score } of picked) {
+      await sendTelegram(article, score);
     }
 
     return res.status(200).json({
       ok: true,
       checked: j.articles?.length || 0,
       sentCount: picked.length,
+      sent: picked.map(({ article, score }) => ({
+        title: article.title,
+        source: article.source?.name,
+        score,
+      })),
     });
   } catch (e) {
     return res.status(500).json({
