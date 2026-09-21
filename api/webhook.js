@@ -2,7 +2,6 @@ const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || "@coinhouse_ai";
 const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 
-// 나중에 거래소 가입 링크를 넣으면 버튼 자동 생성 가능
 const JOIN_URL = process.env.JOIN_URL || "";
 const GUIDE_URL = process.env.GUIDE_URL || "";
 
@@ -57,12 +56,12 @@ function getMessage(data) {
   if (event === "buy_signal") {
     return `🟢 <b>COINHOUSE 매수 신호</b>
 
-<b>${symbol}</b> · ${timeframe}
-
+종목 : <b>${symbol}</b>
+시간봉 : <b>${timeframe}</b>
 현재가 : <b>${price}</b>
 
 현재 매수 신호가 확인되었습니다.
-시장 흐름과 목표지점을 확인해주세요.
+시장 흐름과 목표지점을 함께 확인해주세요.
 
 #매수신호 #COINHOUSE`;
   }
@@ -70,12 +69,12 @@ function getMessage(data) {
   if (event === "sell_signal") {
     return `🔴 <b>COINHOUSE 매도 신호</b>
 
-<b>${symbol}</b> · ${timeframe}
-
+종목 : <b>${symbol}</b>
+시간봉 : <b>${timeframe}</b>
 현재가 : <b>${price}</b>
 
 현재 매도 신호가 확인되었습니다.
-시장 흐름과 목표지점을 확인해주세요.
+시장 흐름과 목표지점을 함께 확인해주세요.
 
 #매도신호 #COINHOUSE`;
   }
@@ -83,12 +82,12 @@ function getMessage(data) {
   if (event === "target1") {
     return `🎯 <b>COINHOUSE 1차 목표 도달</b>
 
-<b>${symbol}</b> · ${timeframe}
-
+종목 : <b>${symbol}</b>
+시간봉 : <b>${timeframe}</b>
 도달 가격 : <b>${price}</b>
 
 1차 목표지점에 도달했습니다.
-다음 목표지점을 확인해주세요.
+다음 목표지점과 시장 흐름을 확인해주세요.
 
 #1차목표도달 #COINHOUSE`;
   }
@@ -96,11 +95,12 @@ function getMessage(data) {
   if (event === "target2") {
     return `✅ <b>COINHOUSE 2차 목표 도달</b>
 
-<b>${symbol}</b> · ${timeframe}
-
+종목 : <b>${symbol}</b>
+시간봉 : <b>${timeframe}</b>
 도달 가격 : <b>${price}</b>
 
 2차 목표지점 도달이 확인되었습니다.
+현재 신호의 진행 상태를 확인해주세요.
 
 #2차목표도달 #COINHOUSE`;
   }
@@ -108,26 +108,24 @@ function getMessage(data) {
   if (event === "stop") {
     return `⛔ <b>COINHOUSE 신호 종료</b>
 
-<b>${symbol}</b> · ${timeframe}
+종목 : <b>${symbol}</b>
+시간봉 : <b>${timeframe}</b>
+종료 가격 : <b>${price}</b>
 
-손절 지점 : <b>${price}</b>
+손절 지점 도달로 해당 신호 추적을 종료합니다.
+새로운 신호가 확인될 때까지 대기해주세요.
 
-손절 지점 도달로
-해당 신호 추적을 종료합니다.
-
-#손절도달 #신호종료 #COINHOUSE`;
+#신호종료 #COINHOUSE`;
   }
 
   if (event === "exit_warning") {
     return `⚠️ <b>COINHOUSE 익절 주의</b>
 
-<b>${symbol}</b> · ${timeframe}
-
+종목 : <b>${symbol}</b>
+시간봉 : <b>${timeframe}</b>
 현재가 : <b>${price}</b>
 
-현재 진행 중인 신호의
-모멘텀 약화가 감지되었습니다.
-
+현재 진행 중인 신호에서 모멘텀 약화가 감지되었습니다.
 수익 구간 관리에 유의해주세요.
 
 #익절주의 #COINHOUSE`;
@@ -135,8 +133,8 @@ function getMessage(data) {
 
   return `📊 <b>COINHOUSE Market Intelligence</b>
 
-<b>${symbol}</b> · ${timeframe}
-
+종목 : <b>${symbol}</b>
+시간봉 : <b>${timeframe}</b>
 현재가 : <b>${price}</b>
 
 새로운 시장 이벤트가 감지되었습니다.
@@ -180,6 +178,7 @@ export default async function handler(req, res) {
       ok: true,
       service: "COINHOUSE Telegram Webhook",
       status: "running",
+      version: "1.1",
     });
   }
 
@@ -207,15 +206,11 @@ export default async function handler(req, res) {
       });
     }
 
-    // WEBHOOK_SECRET을 Vercel에 설정했다면
-    // TradingView 메시지에도 같은 secret이 있어야 함
-    if (WEBHOOK_SECRET) {
-      if (data.secret !== WEBHOOK_SECRET) {
-        return res.status(401).json({
-          ok: false,
-          error: "Invalid webhook secret",
-        });
-      }
+    if (WEBHOOK_SECRET && data.secret !== WEBHOOK_SECRET) {
+      return res.status(401).json({
+        ok: false,
+        error: "Invalid webhook secret",
+      });
     }
 
     if (!data.event) {
