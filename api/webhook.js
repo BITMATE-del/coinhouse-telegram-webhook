@@ -5,6 +5,14 @@ const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET;
 const JOIN_URL = process.env.JOIN_URL || "";
 const GUIDE_URL = process.env.GUIDE_URL || "";
 
+const DEDUP_WINDOW_MS = 2 * 60 * 1000;
+
+if (!globalThis.__coinhouseDedupCache) {
+  globalThis.__coinhouseDedupCache = new Map();
+}
+
+const dedupCache = globalThis.__coinhouseDedupCache;
+
 function escapeHtml(value = "") {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -13,28 +21,34 @@ function escapeHtml(value = "") {
 }
 
 function hasValue(value) {
-  return value !== undefined && value !== null && String(value).trim() !== "" && String(value) !== "na";
+  return value !== undefined &&
+    value !== null &&
+    String(value).trim() !== "" &&
+    String(value) !== "na";
+}
+
+function toNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
 }
 
 function formatPrice(value) {
   if (!hasValue(value)) return "-";
 
-  const number = Number(value);
-
-  if (!Number.isFinite(number)) {
-    return String(value);
-  }
+  const number = toNumber(value);
+  if (number === null) return String(value);
 
   return number.toLocaleString("ko-KR", {
     maximumFractionDigits: 8,
   });
 }
 
-function formatPercent(value) {
-  if (!hasValue(value)) return "-";
-  const number = Number(value);
-  if (!Number.isFinite(number)) return String(value);
-  return `${Math.round(number)}%`;
+function formatPercent(value, signed = false) {
+  const number = toNumber(value);
+  if (number === null) return "-";
+
+  const prefix = signed && number > 0 ? "+" : "";
+  return `${prefix}${number.toFixed(2)}%`;
 }
 
 function formatTimeframe(value) {
@@ -60,127 +74,228 @@ function formatTimeframe(value) {
   return map[tf] || tf;
 }
 
-function detailLines(data) {
+function getDirection(data) {
+  const entry = toNumber(data.entry);
+  const target1 = toNumber(data.target1);
+  const stop = toNumber(data.stop);
+
+  if (entry !== null && target1 !== null) {
+    if (target1 > entry) return "LONG";
+    if (target1 < entry) return "SHORT";
+  }
+
+  if (entry !== null && stop !== null) {
+    if (stop < entry) return "LONG";
+    if (stop > entry) return "SHORT";
+  }
+
+  if (data.event === "buy_signal") return "LONG";
+  if (data.event === "sell_signal") return "SHORT";
+
+  return null;
+}
+
+function getReturnPercent(direction, entry, value) {
+  if (entry === null || value === null || entry === 0 || !direction) {
+    return null;
+  }
+
+  if (direction === "LONG") {
+    return ((value - entry) / entry) * 100;
+  }
+
+  return ((entry - value) / entry) * 100;
+}
+
+function getMetrics(data) {
+  const direction = getDirection(data);
+  const entry = toNumber(data.entry);
+  const price = toNumber(data.price);
+  const target1 = toNumber(data.target1);
+  const target2 = toNumber(data.target2);
+  const stop = toNumber(data.stop);
+
+  const currentReturn = getReturnPercent(direction, entry, price);
+  const target1Return = getReturnPercent(direction, entry, target1);
+  const target2Return = getReturnPercent(direction, entry, target2);
+  const stopReturn = getReturnPercent(direction, entry, stop);
+
+  const stopLossPct = stopReturn === null ? null : Math.abs(stopReturn);
+  const rewardRisk =
+    target2Return !== null &&
+    stopLossPct !== null &&
+    stopLossPct > 0
+      ? Math.abs(target2Return) / stopLossPct
+      : null;
+
+  return {
+    direction,
+    entry,
+    price,
+    target1,
+    target2,
+    stop,
+    currentReturn,
+    target1Return,
+    target2Return,
+    stopLossPct,
+    rewardRisk,
+  };
+}
+
+function cleanupDedupCache() {
+  const now = Date.now();
+
+  for (const [key, timestamp] of dedupCache.entries()) {
+    if (now - timestamp > DEDUP_WINDOW_MS) {
+      dedupCache.delete(key);
+    }
+  }
+}
+
+function getDedupKey(data) {
+  return [
+    data.event || "",
+    data.symbol || "",
+    data.timeframe || "",
+    data.price || "",
+    data.entry || "",
+    data.target1 || "",
+    data.target2 || "",
+    data.stop || "",
+  ].join("|");
+}
+
+function isDuplicate(data) {
+  cleanupDedupCache();
+
+  const key = getDedupKey(data);
+  const now = Date.now();
+  const lastSeen = dedupCache.get(key);
+
+  if (lastSeen && now - lastSeen < DEDUP_WINDOW_MS) {
+    return true;
+  }
+
+  dedupCache.set(key, now);
+  return false;
+}
+
+function getHeader(event) {
+  const headers = {
+    buy_signal: "🟢 <b>COINHOUSE 매수 신호</b>",
+    sell_signal: "🔴 <b>COINHOUSE 매도 신호</b>",
+    target1: "🎯 <b>COINHOUSE 1차 목표 도달</b>",
+    target2: "🏆 <b>COINHOUSE 2차 목표 도달</b>",
+    stop: "🛑 <b>COINHOUSE 신호 종료</b>",
+    exit_warning: "⚠️ <b>COINHOUSE 익절 주의</b>",
+  };
+
+  return headers[event] || "📊 <b>COINHOUSE Market Intelligence AI</b>";
+}
+
+function getStatusText(event) {
+  const messages = {
+    buy_signal:
+      "상승 방향 조건이 충족되어 매수 신호가 확인되었습니다.",
+    sell_signal:
+      "하락 방향 조건이 충족되어 매도 신호가 확인되었습니다.",
+    target1:
+      "1차 목표지점에 도달했습니다. 다음 목표와 현재 흐름을 확인해주세요.",
+    target2:
+      "2차 목표지점 도달이 확인되었습니다. 수익 구간 관리에 유의해주세요.",
+    stop:
+      "손절 지점에 도달해 해당 신호 추적을 종료합니다.",
+    exit_warning:
+      "진행 중인 신호에서 모멘텀 약화가 감지되었습니다.",
+  };
+
+  return messages[event] || "새로운 시장 이벤트가 감지되었습니다.";
+}
+
+function buildPerformanceBlock(data) {
+  const metrics = getMetrics(data);
   const lines = [];
 
   if (hasValue(data.strength)) {
-    lines.push(`신호 강도 : <b>${escapeHtml(formatPercent(data.strength))}</b>`);
-  }
-  if (hasValue(data.entry)) {
-    lines.push(`진입 기준 : <b>${escapeHtml(formatPrice(data.entry))}</b>`);
-  }
-  if (hasValue(data.target1)) {
-    lines.push(`1차 목표 : <b>${escapeHtml(formatPrice(data.target1))}</b>`);
-  }
-  if (hasValue(data.target2)) {
-    lines.push(`2차 목표 : <b>${escapeHtml(formatPrice(data.target2))}</b>`);
-  }
-  if (hasValue(data.stop)) {
-    lines.push(`손절 지점 : <b>${escapeHtml(formatPrice(data.stop))}</b>`);
+    lines.push(`신호 강도   <b>${escapeHtml(String(Math.round(Number(data.strength))))}%</b>`);
   }
 
-  return lines.join("\n");
+  if (metrics.entry !== null) {
+    lines.push(`진입 기준   <b>${escapeHtml(formatPrice(metrics.entry))}</b>`);
+  }
+
+  if (metrics.target1 !== null) {
+    const pct =
+      metrics.target1Return === null
+        ? ""
+        : `  <b>(${escapeHtml(formatPercent(metrics.target1Return, true))})</b>`;
+
+    lines.push(
+      `1차 목표   <b>${escapeHtml(formatPrice(metrics.target1))}</b>${pct}`
+    );
+  }
+
+  if (metrics.target2 !== null) {
+    const pct =
+      metrics.target2Return === null
+        ? ""
+        : `  <b>(${escapeHtml(formatPercent(metrics.target2Return, true))})</b>`;
+
+    lines.push(
+      `2차 목표   <b>${escapeHtml(formatPrice(metrics.target2))}</b>${pct}`
+    );
+  }
+
+  if (metrics.stop !== null) {
+    const pct =
+      metrics.stopLossPct === null
+        ? ""
+        : `  <b>(-${metrics.stopLossPct.toFixed(2)}%)</b>`;
+
+    lines.push(
+      `손절 지점   <b>${escapeHtml(formatPrice(metrics.stop))}</b>${pct}`
+    );
+  }
+
+  if (metrics.currentReturn !== null) {
+    lines.push(
+      `현재 기준   <b>${escapeHtml(formatPercent(metrics.currentReturn, true))}</b>`
+    );
+  }
+
+  if (metrics.rewardRisk !== null) {
+    lines.push(
+      `예상 손익비   <b>1 : ${metrics.rewardRisk.toFixed(2)}</b>`
+    );
+  }
+
+  if (!lines.length) return "";
+
+  return `📌 <b>신호 정보</b>
+━━━━━━━━━━━━━━
+${lines.join("\n")}`;
 }
 
 function getMessage(data) {
-  const event = data.event;
   const symbol = escapeHtml(data.symbol || "종목 미확인");
   const timeframe = escapeHtml(formatTimeframe(data.timeframe));
   const price = escapeHtml(formatPrice(data.price));
-  const details = detailLines(data);
-  const detailBlock = details ? `\n\n${details}` : "";
+  const performance = buildPerformanceBlock(data);
+  const statusText = getStatusText(data.event);
 
-  if (event === "buy_signal") {
-    return `🟢 <b>COINHOUSE 매수 신호</b>
+  return `${getHeader(data.event)}
 
-종목 : <b>${symbol}</b>
-시간봉 : <b>${timeframe}</b>
-현재가 : <b>${price}</b>${detailBlock}
+<b>${symbol}</b>  ·  ${timeframe}
+현재가  <b>${price}</b>
 
-현재 매수 신호가 확인되었습니다.
-시장 흐름과 목표지점을 함께 확인해주세요.
+${performance ? performance + "\n\n" : ""}💡 <b>COINHOUSE AI 분석</b>
+${statusText}
 
+━━━━━━━━━━━━━━
 ※ 신호 강도는 조건 충족도이며 성공 확률을 의미하지 않습니다.
 
-#매수신호 #COINHOUSE`;
-  }
-
-  if (event === "sell_signal") {
-    return `🔴 <b>COINHOUSE 매도 신호</b>
-
-종목 : <b>${symbol}</b>
-시간봉 : <b>${timeframe}</b>
-현재가 : <b>${price}</b>${detailBlock}
-
-현재 매도 신호가 확인되었습니다.
-시장 흐름과 목표지점을 함께 확인해주세요.
-
-※ 신호 강도는 조건 충족도이며 성공 확률을 의미하지 않습니다.
-
-#매도신호 #COINHOUSE`;
-  }
-
-  if (event === "target1") {
-    return `🎯 <b>COINHOUSE 1차 목표 도달</b>
-
-종목 : <b>${symbol}</b>
-시간봉 : <b>${timeframe}</b>
-도달 가격 : <b>${price}</b>${detailBlock}
-
-1차 목표지점에 도달했습니다.
-다음 목표지점과 시장 흐름을 확인해주세요.
-
-#1차목표도달 #COINHOUSE`;
-  }
-
-  if (event === "target2") {
-    return `✅ <b>COINHOUSE 2차 목표 도달</b>
-
-종목 : <b>${symbol}</b>
-시간봉 : <b>${timeframe}</b>
-도달 가격 : <b>${price}</b>${detailBlock}
-
-2차 목표지점 도달이 확인되었습니다.
-현재 신호의 진행 상태를 확인해주세요.
-
-#2차목표도달 #COINHOUSE`;
-  }
-
-  if (event === "stop") {
-    return `⛔ <b>COINHOUSE 신호 종료</b>
-
-종목 : <b>${symbol}</b>
-시간봉 : <b>${timeframe}</b>
-종료 가격 : <b>${price}</b>${detailBlock}
-
-손절 지점 도달로 해당 신호 추적을 종료합니다.
-새로운 신호가 확인될 때까지 대기해주세요.
-
-#신호종료 #COINHOUSE`;
-  }
-
-  if (event === "exit_warning") {
-    return `⚠️ <b>COINHOUSE 익절 주의</b>
-
-종목 : <b>${symbol}</b>
-시간봉 : <b>${timeframe}</b>
-현재가 : <b>${price}</b>${detailBlock}
-
-현재 진행 중인 신호에서 모멘텀 약화가 감지되었습니다.
-수익 구간 관리에 유의해주세요.
-
-#익절주의 #COINHOUSE`;
-  }
-
-  return `📊 <b>COINHOUSE Market Intelligence</b>
-
-종목 : <b>${symbol}</b>
-시간봉 : <b>${timeframe}</b>
-현재가 : <b>${price}</b>${detailBlock}
-
-새로운 시장 이벤트가 감지되었습니다.
-
-#COINHOUSE`;
+#COINHOUSE #MarketIntelligence`;
 }
 
 function getReplyMarkup() {
@@ -219,7 +334,7 @@ export default async function handler(req, res) {
       ok: true,
       service: "COINHOUSE Telegram Webhook",
       status: "running",
-      version: "1.2",
+      version: "1.3",
     });
   }
 
@@ -258,6 +373,21 @@ export default async function handler(req, res) {
       return res.status(400).json({
         ok: false,
         error: "event 값이 없습니다.",
+      });
+    }
+
+    if (isDuplicate(data)) {
+      console.log("Duplicate COINHOUSE alert ignored:", {
+        event: data.event,
+        symbol: data.symbol,
+        timeframe: data.timeframe,
+        price: data.price,
+      });
+
+      return res.status(200).json({
+        ok: true,
+        duplicate: true,
+        skipped: true,
       });
     }
 
