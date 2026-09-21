@@ -12,16 +12,29 @@ function escapeHtml(value = "") {
     .replaceAll(">", "&gt;");
 }
 
+function hasValue(value) {
+  return value !== undefined && value !== null && String(value).trim() !== "" && String(value) !== "na";
+}
+
 function formatPrice(value) {
+  if (!hasValue(value)) return "-";
+
   const number = Number(value);
 
   if (!Number.isFinite(number)) {
-    return String(value || "-");
+    return String(value);
   }
 
   return number.toLocaleString("ko-KR", {
     maximumFractionDigits: 8,
   });
+}
+
+function formatPercent(value) {
+  if (!hasValue(value)) return "-";
+  const number = Number(value);
+  if (!Number.isFinite(number)) return String(value);
+  return `${Math.round(number)}%`;
 }
 
 function formatTimeframe(value) {
@@ -47,21 +60,47 @@ function formatTimeframe(value) {
   return map[tf] || tf;
 }
 
+function detailLines(data) {
+  const lines = [];
+
+  if (hasValue(data.strength)) {
+    lines.push(`신호 강도 : <b>${escapeHtml(formatPercent(data.strength))}</b>`);
+  }
+  if (hasValue(data.entry)) {
+    lines.push(`진입 기준 : <b>${escapeHtml(formatPrice(data.entry))}</b>`);
+  }
+  if (hasValue(data.target1)) {
+    lines.push(`1차 목표 : <b>${escapeHtml(formatPrice(data.target1))}</b>`);
+  }
+  if (hasValue(data.target2)) {
+    lines.push(`2차 목표 : <b>${escapeHtml(formatPrice(data.target2))}</b>`);
+  }
+  if (hasValue(data.stop)) {
+    lines.push(`손절 지점 : <b>${escapeHtml(formatPrice(data.stop))}</b>`);
+  }
+
+  return lines.join("\n");
+}
+
 function getMessage(data) {
   const event = data.event;
   const symbol = escapeHtml(data.symbol || "종목 미확인");
   const timeframe = escapeHtml(formatTimeframe(data.timeframe));
   const price = escapeHtml(formatPrice(data.price));
+  const details = detailLines(data);
+  const detailBlock = details ? `\n\n${details}` : "";
 
   if (event === "buy_signal") {
     return `🟢 <b>COINHOUSE 매수 신호</b>
 
 종목 : <b>${symbol}</b>
 시간봉 : <b>${timeframe}</b>
-현재가 : <b>${price}</b>
+현재가 : <b>${price}</b>${detailBlock}
 
 현재 매수 신호가 확인되었습니다.
 시장 흐름과 목표지점을 함께 확인해주세요.
+
+※ 신호 강도는 조건 충족도이며 성공 확률을 의미하지 않습니다.
 
 #매수신호 #COINHOUSE`;
   }
@@ -71,10 +110,12 @@ function getMessage(data) {
 
 종목 : <b>${symbol}</b>
 시간봉 : <b>${timeframe}</b>
-현재가 : <b>${price}</b>
+현재가 : <b>${price}</b>${detailBlock}
 
 현재 매도 신호가 확인되었습니다.
 시장 흐름과 목표지점을 함께 확인해주세요.
+
+※ 신호 강도는 조건 충족도이며 성공 확률을 의미하지 않습니다.
 
 #매도신호 #COINHOUSE`;
   }
@@ -84,7 +125,7 @@ function getMessage(data) {
 
 종목 : <b>${symbol}</b>
 시간봉 : <b>${timeframe}</b>
-도달 가격 : <b>${price}</b>
+도달 가격 : <b>${price}</b>${detailBlock}
 
 1차 목표지점에 도달했습니다.
 다음 목표지점과 시장 흐름을 확인해주세요.
@@ -97,7 +138,7 @@ function getMessage(data) {
 
 종목 : <b>${symbol}</b>
 시간봉 : <b>${timeframe}</b>
-도달 가격 : <b>${price}</b>
+도달 가격 : <b>${price}</b>${detailBlock}
 
 2차 목표지점 도달이 확인되었습니다.
 현재 신호의 진행 상태를 확인해주세요.
@@ -110,7 +151,7 @@ function getMessage(data) {
 
 종목 : <b>${symbol}</b>
 시간봉 : <b>${timeframe}</b>
-종료 가격 : <b>${price}</b>
+종료 가격 : <b>${price}</b>${detailBlock}
 
 손절 지점 도달로 해당 신호 추적을 종료합니다.
 새로운 신호가 확인될 때까지 대기해주세요.
@@ -123,7 +164,7 @@ function getMessage(data) {
 
 종목 : <b>${symbol}</b>
 시간봉 : <b>${timeframe}</b>
-현재가 : <b>${price}</b>
+현재가 : <b>${price}</b>${detailBlock}
 
 현재 진행 중인 신호에서 모멘텀 약화가 감지되었습니다.
 수익 구간 관리에 유의해주세요.
@@ -135,7 +176,7 @@ function getMessage(data) {
 
 종목 : <b>${symbol}</b>
 시간봉 : <b>${timeframe}</b>
-현재가 : <b>${price}</b>
+현재가 : <b>${price}</b>${detailBlock}
 
 새로운 시장 이벤트가 감지되었습니다.
 
@@ -178,7 +219,7 @@ export default async function handler(req, res) {
       ok: true,
       service: "COINHOUSE Telegram Webhook",
       status: "running",
-      version: "1.1",
+      version: "1.2",
     });
   }
 
@@ -262,6 +303,7 @@ export default async function handler(req, res) {
       event: data.event,
       symbol: data.symbol,
       timeframe: data.timeframe,
+      strength: data.strength,
     });
 
     return res.status(200).json({
