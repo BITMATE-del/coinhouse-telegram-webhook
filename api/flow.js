@@ -7,7 +7,7 @@ const DEDUP_API_KEY = "sb_publishable_a7YWOaS5bhOcoHqHMpunKQ_-Nm-2pOC";
 
 const SYMBOLS = ["BTCUSDT", "ETHUSDT"];
 const PERIOD = "15m";
-const MIN_ALERT_SCORE = 5;
+const MIN_ALERT_SCORE = 3;
 
 function esc(v = "") {
   return String(v)
@@ -150,10 +150,10 @@ async function getFlow(symbol) {
     reasons.push(`공격적 체결 ${buyShare >= sellShare ? "매수" : "매도"} 우위 ${Math.max(buyShare, sellShare).toFixed(1)}%`);
   }
 
-  if (largestTrade && largestTrade.notional >= 1000000) {
+  if (largestTrade && largestTrade.notional >= 750000) {
     score += 2;
     reasons.push(`고래성 단일 체결 약 $${(largestTrade.notional / 1000000).toFixed(2)}M`);
-  } else if (largestTrade && largestTrade.notional >= 500000) {
+  } else if (largestTrade && largestTrade.notional >= 250000) {
     score += 1;
     reasons.push(`대형 단일 체결 약 $${(largestTrade.notional / 1000).toFixed(0)}K`);
   }
@@ -260,7 +260,11 @@ export default async function handler(req, res) {
       ok: true,
       service: "COINHOUSE Market Flow Monitor",
       status: "running",
-      version: "1.0",
+      version: "1.1",
+      threshold: MIN_ALERT_SCORE,
+      symbols: SYMBOLS,
+      period: PERIOD,
+      telegramConfigured: Boolean(TELEGRAM_BOT_TOKEN),
     });
   }
 
