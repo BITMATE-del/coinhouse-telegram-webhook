@@ -7,6 +7,9 @@ const CRON_SECRET = process.env.CRON_SECRET;
 if (!globalThis.__coinhouseNewsCache) globalThis.__coinhouseNewsCache = new Map();
 const sentCache = globalThis.__coinhouseNewsCache;
 
+const NEWS_DEDUP_API_URL = "https://fgyiofykvpkxpeylcocn.supabase.co/rest/v1/rpc/claim_coinhouse_signal";
+const NEWS_DEDUP_API_KEY = "sb_publishable_a7YWOaS5bhOcoHqHMpunKQ_-Nm-2pOC";
+
 const KEYWORDS = [
   ["bitcoin etf", 40],
   ["spot etf", 35],
@@ -100,7 +103,7 @@ function marketCheck(article) {
   return "뉴스 발표 직후 가격 반응과 거래량 변화를 함께 확인해주세요.";
 }
 
-function isDuplicate(article) {
+async function isDuplicate(article) {
   const key = article.url || article.title || "";
   const now = Date.now();
 
@@ -109,6 +112,26 @@ function isDuplicate(article) {
   }
 
   if (sentCache.has(key)) return true;
+
+  try {
+    const response = await fetch(NEWS_DEDUP_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: NEWS_DEDUP_API_KEY,
+        Authorization: `Bearer ${NEWS_DEDUP_API_KEY}`,
+      },
+      body: JSON.stringify({ p_event_key: `news|${key}` }),
+    });
+
+    if (response.ok) {
+      const claimed = await response.json();
+      if (claimed === false) return true;
+    }
+  } catch (error) {
+    console.error("News dedup error:", error);
+  }
+
   sentCache.set(key, now);
   return false;
 }
@@ -170,7 +193,10 @@ export default async function handler(req, res) {
       ok: true,
       service: "COINHOUSE News Monitor",
       status: "running",
-      version: "1.1",
+      version: "1.2",
+      newsApiConfigured: Boolean(NEWS_API_KEY),
+      telegramConfigured: Boolean(TELEGRAM_BOT_TOKEN),
+      threshold: 50,
     });
   }
 
@@ -187,7 +213,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const from = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    const from = new Date(Date.now() - 6 * 60 * 60 * 1000).toISOString();
 
     const params = new URLSearchParams({
       q: '(bitcoin OR BTC OR ethereum OR crypto OR "spot ETF" OR FOMC OR SEC OR CPI OR PCE OR Binance OR Coinbase OR BlackRock)',
@@ -213,11 +239,18 @@ export default async function handler(req, res) {
       });
     }
 
-    const picked = (j.articles || [])
+    const scored = (j.articles || [])
       .map((article) => ({ article, score: articleScore(article) }))
-      .filter(({ article, score }) => score >= 70 && !isDuplicate(article))
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 2);
+      .filter(({ score }) => score >= 50)
+      .sort((a, b) => b.score - a.score);
+
+    const picked = [];
+    for (const item of scored) {
+      if (!(await isDuplicate(item.article))) {
+        picked.push(item);
+      }
+      if (picked.length >= 1) break;
+    }
 
     for (const { article, score } of picked) {
       await sendTelegram(article, score);
