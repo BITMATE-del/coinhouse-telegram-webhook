@@ -10,6 +10,7 @@ const LEVERAGE = Number(process.env.LEVERAGE || "20");
 const DEDUP_WINDOW_MS = 10 * 60 * 1000;
 
 const DEDUP_API_URL = "https://fgyiofykvpkxpeylcocn.supabase.co/rest/v1/rpc/claim_coinhouse_signal";
+const POSITION_API_URL = "https://fgyiofykvpkxpeylcocn.supabase.co/rest/v1/rpc/process_coinhouse_position";
 const DEDUP_API_KEY = "sb_publishable_a7YWOaS5bhOcoHqHMpunKQ_-Nm-2pOC";
 
 if (!globalThis.__coinhouseDedupCache) {
@@ -257,20 +258,127 @@ async function isDuplicate(data) {
   return false;
 }
 
-function getHeader(event) {
-  const headers = {
-    buy_signal: "🟢 <b>COINHOUSE 매수 신호</b>",
-    sell_signal: "🔴 <b>COINHOUSE 매도 신호</b>",
-    target1: "🎯 <b>COINHOUSE 1차 목표 도달</b>",
-    target2: "🏆 <b>COINHOUSE 2차 목표 도달</b>",
-    stop: "🛑 <b>COINHOUSE 신호 종료</b>",
-    exit_warning: "⚠️ <b>COINHOUSE 익절 주의</b>",
-  };
+async function processPosition(data) {
+  const direction = getDirection(data);
+  const stateKey = `${data.symbol || "UNKNOWN"}|${data.timeframe || "UNKNOWN"}`;
 
-  return headers[event] || "📊 <b>COINHOUSE Market Intelligence AI</b>";
+  try {
+    const response = await fetch(POSITION_API_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "apikey": DEDUP_API_KEY,
+        "Authorization": `Bearer ${DEDUP_API_KEY}`,
+      },
+      body: JSON.stringify({
+        p_state_key: stateKey,
+        p_event: data.event,
+        p_direction: direction,
+        p_entry: toNumber(data.entry),
+      }),
+    });
+
+    if (response.ok) {
+      return await response.json();
+    }
+
+    console.error("Position state API error:", await response.text());
+  } catch (error) {
+    console.error("Position state request failed:", error);
+  }
+
+  if (data.event === "buy_signal") return { action: "OPEN_LONG", direction: "LONG", signal_count: 1 };
+  if (data.event === "sell_signal") return { action: "OPEN_SHORT", direction: "SHORT", signal_count: 1 };
+  if (data.event === "target1") return { action: "TARGET1" };
+  if (data.event === "target2") return { action: "TARGET2_EXIT" };
+  if (data.event === "stop") return { action: "STOP_EXIT" };
+  if (data.event === "exit_warning" || data.event === "exit_signal") return { action: "EXIT_SIGNAL" };
+  return { action: "NONE" };
 }
 
-function getStatusText(data, metrics) {
+function getHeader(data, metrics, positionState) {
+  const action = positionState?.action || "NONE";
+
+  if (action === "ADD_LONG") {
+    return `🟢 <b>COINHOUSE ${positionState.signal_count || 2}차 매수 신호</b>`;
+  }
+
+  if (action === "ADD_SHORT") {
+    return `🔴 <b>COINHOUSE ${positionState.signal_count || 2}차 매도 신호</b>`;
+  }
+
+  if (action === "FLIP_TO_LONG") {
+    return "🔄 <b>COINHOUSE 포지션 전환 · 매수</b>";
+  }
+
+  if (action === "FLIP_TO_SHORT") {
+    return "🔄 <b>COINHOUSE 포지션 전환 · 매도</b>";
+  }
+
+  if (action === "EXIT_SIGNAL") {
+    return metrics.currentLeveragedReturn !== null && metrics.currentLeveragedReturn > 0
+      ? "💰 <b>COINHOUSE 익절 신호 · 포지션 종료</b>"
+      : "⚠️ <b>COINHOUSE 포지션 종료 신호</b>";
+  }
+
+  const headers = {
+    buy_signal: "🟢 <b>COINHOUSE 1차 매수 신호</b>",
+    sell_signal: "🔴 <b>COINHOUSE 1차 매도 신호</b>",
+    target1: "🎯 <b>COINHOUSE 1차 목표 도달</b>",
+    target2: "🏆 <b>COINHOUSE 2차 목표 도달 · 포지션 종료</b>",
+    stop: "🛑 <b>COINHOUSE 손절 · 포지션 종료</b>",
+    exit_warning: "💰 <b>COINHOUSE 익절 신호 · 포지션 종료</b>",
+    exit_signal: "💰 <b>COINHOUSE 익절 신호 · 포지션 종료</b>",
+  };
+
+  return headers[data.event] || "📊 <b>COINHOUSE Market Intelligence AI</b>";
+}
+
+function getStatusText(data, metrics, positionState) {
+  const action = positionState?.action || "NONE";
+  const count = Number(positionState?.signal_count || 1);
+
+  if (action === "ADD_LONG") {
+    return `🟢 <b>${count}차 매수 신호가 확인되었습니다.</b>
+기존 매수 방향이 유지되는 가운데 동일 방향 조건이 다시 충족되었습니다.
+추가 진입 구간 신호로 분류하며, 기존 손절 기준과 목표 구간을 함께 확인합니다.`;
+  }
+
+  if (action === "ADD_SHORT") {
+    return `🔴 <b>${count}차 매도 신호가 확인되었습니다.</b>
+기존 매도 방향이 유지되는 가운데 동일 방향 조건이 다시 충족되었습니다.
+추가 진입 구간 신호로 분류하며, 기존 손절 기준과 목표 구간을 함께 확인합니다.`;
+  }
+
+  if (action === "FLIP_TO_LONG") {
+    return `🔄 <b>기존 매도 흐름 종료 → 매수 방향 전환</b>
+반대 방향 신호가 새로 확인되어 기존 매도 포지션 추적을 종료하고 매수 방향으로 전환합니다.
+새로운 매수 신호 기준의 목표·손절 구간을 확인해주세요.`;
+  }
+
+  if (action === "FLIP_TO_SHORT") {
+    return `🔄 <b>기존 매수 흐름 종료 → 매도 방향 전환</b>
+반대 방향 신호가 새로 확인되어 기존 매수 포지션 추적을 종료하고 매도 방향으로 전환합니다.
+새로운 매도 신호 기준의 목표·손절 구간을 확인해주세요.`;
+  }
+
+  if (action === "EXIT_SIGNAL") {
+    const pct = metrics.currentLeveragedReturn;
+    const won = metrics.currentKrw;
+
+    if (pct !== null && pct > 0) {
+      const detail = `현재 기준 <b>${escapeHtml(formatPercent(pct, true))}</b>${won === null ? "" : `, 예상 손익 <b>${escapeHtml(formatKrw(won))}</b>`}`;
+      return `💰 <b>익절 신호가 발생했습니다.</b>
+진행 중인 포지션을 종료하고 수익 실현 구간으로 판단합니다.
+${detail}
+새로운 진입 신호가 확인될 때까지 해당 포지션 추적을 종료합니다.`;
+    }
+
+    return `⚠️ <b>포지션 종료 신호가 발생했습니다.</b>
+모멘텀 약화가 확인되어 진행 중인 포지션 추적을 종료합니다.
+새로운 방향 신호가 확인될 때까지 대기합니다.`;
+  }
+
   if (data.event === "target1") {
     const pct = metrics.target1LeveragedReturn;
     const won = metrics.target1Krw;
@@ -280,7 +388,7 @@ function getStatusText(data, metrics) {
 
     return `🎉 <b>1차 목표 달성을 축하드립니다.</b>
 신호가 1차 목표지점에 도달했습니다.${detail}
-다음 목표지점과 시장 흐름을 확인해주세요.`;
+잔여 포지션은 2차 목표 또는 종료 신호까지 추적합니다.`;
   }
 
   if (data.event === "target2") {
@@ -290,9 +398,9 @@ function getStatusText(data, metrics) {
       ? ""
       : `\n현재 2차 목표 기준 수익률은 <b>${escapeHtml(formatPercent(pct, true))}</b>${won === null ? "" : `, 기준금액 예상 수익은 <b>${escapeHtml(formatKrw(won))}</b>`}입니다.`;
 
-    return `🏆 <b>2차 목표 달성을 축하드립니다.</b>
-신호가 2차 목표지점에 도달했습니다.${detail}
-수익 구간 관리에 유의해주세요.`;
+    return `🏆 <b>2차 목표 달성 · 포지션 종료</b>
+신호가 최종 목표지점에 도달했습니다.${detail}
+해당 포지션 추적을 종료하고 새로운 신호를 대기합니다.`;
   }
 
   if (data.event === "stop") {
@@ -302,20 +410,17 @@ function getStatusText(data, metrics) {
       ? ""
       : `\n기준 손실률은 <b>-${pct.toFixed(2)}%</b>${won === null ? "" : `, 기준금액 예상 손실은 <b>${escapeHtml(formatKrw(won))}</b>`}입니다.`;
 
-    return `손절 지점에 도달해 해당 신호 추적을 종료합니다.${detail}
-새로운 신호가 확인될 때까지 대기해주세요.`;
+    return `🛑 <b>손절 기준 도달 · 포지션 종료</b>
+해당 신호 추적을 종료합니다.${detail}
+새로운 방향 신호가 확인될 때까지 대기합니다.`;
   }
 
   if (data.event === "buy_signal") {
-    return "상승 방향 조건이 충족되어 매수 신호가 확인되었습니다.";
+    return "상승 방향 조건이 충족되어 1차 매수 신호가 확인되었습니다.";
   }
 
   if (data.event === "sell_signal") {
-    return "하락 방향 조건이 충족되어 매도 신호가 확인되었습니다.";
-  }
-
-  if (data.event === "exit_warning") {
-    return "진행 중인 신호에서 모멘텀 약화가 감지되었습니다. 수익 구간 관리에 유의해주세요.";
+    return "하락 방향 조건이 충족되어 1차 매도 신호가 확인되었습니다.";
   }
 
   return "새로운 시장 이벤트가 감지되었습니다.";
@@ -409,15 +514,15 @@ function buildPerformanceBlock(data, metrics) {
 ${lines.join("\n")}${capitalLine}`;
 }
 
-function getMessage(data) {
+function getMessage(data, positionState) {
   const symbol = escapeHtml(data.symbol || "종목 미확인");
   const timeframe = escapeHtml(formatTimeframe(data.timeframe));
   const price = escapeHtml(formatPrice(data.price));
   const metrics = getMetrics(data);
   const performance = buildPerformanceBlock(data, metrics);
-  const statusText = getStatusText(data, metrics);
+  const statusText = getStatusText(data, metrics, positionState);
 
-  return `${getHeader(data.event)}
+  return `${getHeader(data, metrics, positionState)}
 
 <b>${symbol}</b>  ·  ${timeframe}
 현재가  <b>${price}</b>
@@ -429,9 +534,7 @@ ${statusText}
 ※ 수익·손실은 레버리지 ${LEVERAGE}배를 단순 적용한 예상치이며 수수료·펀딩비·슬리피지·강제청산 조건은 반영하지 않습니다.
 ※ 신호 강도는 조건 충족도이며 성공 확률을 의미하지 않습니다.
 
-#COINHOUSE #MarketIntelligence
-
-<code>CORE</code>`;
+#COINHOUSE #MarketIntelligence`;
 }
 
 function getReplyMarkup() {
@@ -470,7 +573,7 @@ export default async function handler(req, res) {
       ok: true,
       service: "COINHOUSE Telegram Webhook",
       status: "running",
-      version: "1.6",
+      version: "1.7",
     });
   }
 
@@ -527,7 +630,8 @@ export default async function handler(req, res) {
       });
     }
 
-    const text = getMessage(data);
+    const positionState = await processPosition(data);
+    const text = getMessage(data, positionState);
 
     const telegramPayload = {
       chat_id: TELEGRAM_CHAT_ID,
@@ -575,6 +679,8 @@ export default async function handler(req, res) {
     return res.status(200).json({
       ok: true,
       event: data.event,
+      action: positionState?.action || "NONE",
+      signal_count: positionState?.signal_count || 0,
       telegram_message_id: telegramResult.result?.message_id,
     });
   } catch (error) {
