@@ -51,11 +51,15 @@ export default async function handler(req, res) {
     const secret = process.env.ANGEL_WEBHOOK_SECRET;
     if (!token || !secret) return res.status(503).json({ok:false,configured:false});
     const endpoint = "https://coinhouse-telegram-webhook.vercel.app/api/angel";
+    let phase = "getWebhookInfo";
     try {
       const info = await telegram(token, "getWebhookInfo", {});
       const currentUrl = info.url || "";
       // Bootstrap only an unconfigured bot; never replace an existing webhook.
       if (!currentUrl) {
+        phase = "setWebhook";
+        const secretValid = /^[A-Za-z0-9_-]{1,256}$/.test(secret);
+        if (!secretValid) return res.status(422).json({ok:false,reason:"INVALID_WEBHOOK_SECRET_FORMAT",fix:"Use only A-Z, a-z, 0-9, underscores and hyphens in ANGEL_WEBHOOK_SECRET."});
         await telegram(token,"setWebhook",{
           url:endpoint,
           secret_token:secret,
@@ -79,7 +83,7 @@ export default async function handler(req, res) {
         : /fetch failed|network|ETIMEDOUT|ECONN/i.test(reason) ? "TELEGRAM_NETWORK_ERROR"
         : /Bad Request|400/i.test(reason) ? "TELEGRAM_BAD_REQUEST"
         : "TELEGRAM_API_ERROR";
-      return res.status(502).json({ok:false,error:"Bot connectivity check failed",reason:reasonCode});
+      return res.status(502).json({ok:false,error:"Bot connectivity check failed",phase,reason:reasonCode,telegram_message:reason.replace(/\d{8,10}:[A-Za-z0-9_-]{35,}/g,"[REDACTED]").slice(0,200)});
     }
   }
   if (req.method !== "POST") return res.status(405).json({ok:false,error:"Method not allowed"});
