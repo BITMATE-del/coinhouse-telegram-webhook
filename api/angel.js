@@ -73,7 +73,13 @@ export default async function handler(req, res) {
       });
     } catch (err) {
       console.error("ANGEL webhook setup status error",err.message);
-      return res.status(502).json({ok:false,error:"Bot connectivity check failed"});
+      const reason = String(err.message || "");
+      const reasonCode = /Unauthorized|401/i.test(reason) ? "INVALID_BOT_TOKEN"
+        : /Not Found|404/i.test(reason) ? "BOT_NOT_FOUND_OR_BAD_TOKEN"
+        : /fetch failed|network|ETIMEDOUT|ECONN/i.test(reason) ? "TELEGRAM_NETWORK_ERROR"
+        : /Bad Request|400/i.test(reason) ? "TELEGRAM_BAD_REQUEST"
+        : "TELEGRAM_API_ERROR";
+      return res.status(502).json({ok:false,error:"Bot connectivity check failed",reason:reasonCode});
     }
   }
   if (req.method !== "POST") return res.status(405).json({ok:false,error:"Method not allowed"});
