@@ -74,16 +74,18 @@ export default async function handler(req, res) {
         await telegram(token, "sendMessage", {
           chat_id: m.chat.id,
           text: "📣 전달된 채널의 ID: " + forwardedChannel.id +
-            "\\nVercel ANGEL_CHANNEL_ID에 위 숫자를 입력하세요." +
-            "\\n👤 내 사용자 ID: " + m.from.id +
-            "\\nVercel ANGEL_ADMIN_USER_ID에 위 숫자를 입력하세요."
+            "\nVercel ANGEL_CHANNEL_ID에 위 숫자를 입력하세요." +
+            "\n👤 내 사용자 ID: " + m.from.id +
+            "\nVercel ANGEL_ADMIN_USER_ID에 위 숫자를 입력하세요."
         });
       }
     }
     if (update.message?.text) {
       const m = update.message;
       const command = m.text.trim().split(/\s/)[0].split("@")[0].toLowerCase();
-      if (command === "/ids" || command === "/channelid") {\n        await telegram(token,"sendMessage",{chat_id:m.chat.id,text:"👤 내 사용자 ID: " + m.from.id + "\\n\\n📣 비공개 채널 ID 확인: 봇을 채널 관리자로 추가한 뒤, 채널 게시물 하나를 이 봇 개인 채팅으로 전달하세요. 전달 출처가 숨겨져 있으면 채널 ID를 확인할 수 없습니다."});\n      } else if (command === "/start" || command === "/menu") {
+      if (command === "/ids" || command === "/channelid") {
+        await telegram(token,"sendMessage",{chat_id:m.chat.id,text:"👤 내 사용자 ID: " + m.from.id + "\n\\n📣 비공개 채널 ID 확인: 봇을 채널 관리자로 추가한 뒤, 채널 게시물 하나를 이 봇 개인 채팅으로 전달하세요. 전달 출처가 숨겨져 있으면 채널 ID를 확인할 수 없습니다."});
+      } else if (command === "/start" || command === "/menu") {
         await telegram(token,"sendMessage", {
           chat_id:m.chat.id, text:MESSAGE, reply_markup:keyboard()
         });
