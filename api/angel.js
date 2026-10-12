@@ -46,7 +46,36 @@ async function telegram(token, method, payload) {
   return body.result;
 }
 export default async function handler(req, res) {
-  if (req.method === "GET") return res.status(200).json({ok:true,service:"angel-solution",configured:!!process.env.ANGEL_BOT_TOKEN});
+  if (req.method === "GET") {
+    const token = process.env.ANGEL_BOT_TOKEN;
+    const secret = process.env.ANGEL_WEBHOOK_SECRET;
+    if (!token || !secret) return res.status(503).json({ok:false,configured:false});
+    const endpoint = "https://coinhouse-telegram-webhook.vercel.app/api/angel";
+    try {
+      const info = await telegram(token, "getWebhookInfo", {});
+      const currentUrl = info.url || "";
+      // Bootstrap only an unconfigured bot; never replace an existing webhook.
+      if (!currentUrl) {
+        await telegram(token,"setWebhook",{
+          url:endpoint,
+          secret_token:secret,
+          allowed_updates:["message","callback_query"],
+          drop_pending_updates:false
+        });
+        return res.status(200).json({ok:true,service:"angel-solution",webhook:"registered",endpoint});
+      }
+      return res.status(200).json({
+        ok:true,service:"angel-solution",
+        webhook:currentUrl === endpoint ? "connected" : "other_webhook_present",
+        endpoint_matches:currentUrl === endpoint,
+        pending_update_count:info.pending_update_count || 0,
+        last_error_message: info.last_error_message || null
+      });
+    } catch (err) {
+      console.error("ANGEL webhook setup status error",err.message);
+      return res.status(502).json({ok:false,error:"Bot connectivity check failed"});
+    }
+  }
   if (req.method !== "POST") return res.status(405).json({ok:false,error:"Method not allowed"});
   const token = process.env.ANGEL_BOT_TOKEN;
   const secret = process.env.ANGEL_WEBHOOK_SECRET;
@@ -84,7 +113,7 @@ export default async function handler(req, res) {
       const m = update.message;
       const command = m.text.trim().split(/\s/)[0].split("@")[0].toLowerCase();
       if (command === "/ids" || command === "/channelid") {
-        await telegram(token,"sendMessage",{chat_id:m.chat.id,text:"👤 내 사용자 ID: " + m.from.id + "\n\\n📣 비공개 채널 ID 확인: 봇을 채널 관리자로 추가한 뒤, 채널 게시물 하나를 이 봇 개인 채팅으로 전달하세요. 전달 출처가 숨겨져 있으면 채널 ID를 확인할 수 없습니다."});
+        await telegram(token,"sendMessage",{chat_id:m.chat.id,text:"👤 내 사용자 ID: " + m.from.id + "\n\n📣 비공개 채널 ID 확인: 봇을 채널 관리자로 추가한 뒤, 채널 게시물 하나를 이 봇 개인 채팅으로 전달하세요. 전달 출처가 숨겨져 있으면 채널 ID를 확인할 수 없습니다."});
       } else if (command === "/start" || command === "/menu") {
         await telegram(token,"sendMessage", {
           chat_id:m.chat.id, text:MESSAGE, reply_markup:keyboard()
