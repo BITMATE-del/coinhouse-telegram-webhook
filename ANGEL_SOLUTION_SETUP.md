@@ -42,3 +42,5 @@ curl -X POST "https://api.telegram.org/bot$ANGEL_BOT_TOKEN/setWebhook" \
 - 403: Telegram `secret_token` 값 불일치.
 - `/publish` 권한 없음: `ANGEL_ADMIN_USER_ID` 확인, 봇과 개인 채팅 확인.
 - 채널 전송 실패: 봇 관리자의 게시 권한과 채널 ID 확인.
+
+> ANGEL_WEBHOOK_SECRET 값 변경 후 Production 환경변수 반영을 위해 새 배포가 필요합니다.
