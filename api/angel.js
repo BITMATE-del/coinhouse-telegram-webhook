@@ -21,7 +21,7 @@ const MESSAGE = [
   "⭐ 솔루션 문의하기",
   "📩 @angel_solt",
   "https://t.me/angel_solt"
-].join("\\n");
+].join("\n");
 
 async function telegram(token, method, payload) {
   const response = await fetch("https://api.telegram.org/bot" + token + "/" + method, {
