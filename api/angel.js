@@ -13,22 +13,16 @@ const MESSAGE = [
   "원하는 상상을 현실로",
   "랜딩페이지 · 솔루션 · 봇 · 개발",
   "",
-  "AI를 활용한 단독 개발 솔루션",
-  "복사 붙여넣기 NO! 나만의 전용 솔루션",
-  "",
-  "📩 개발 문의: @angel_solt"
-].join("\n");
+  "━━━━━━━━━━━━━━━━━━",
+  "🌐 랜딩페이지  │ 🤖 봇 개발  │ ⚙️ 맞춤 솔루션",
+  "💻 단독 개발  │ 📦 프로젝트 판매  │ 🖥️ 서버 구축",
+  "📁 원본파일 제공  │ ✨ AI 활용 개발  │ 💰 가격 상담",
+  "━━━━━━━━━━━━━━━━━━",
+  "⭐ 솔루션 문의하기",
+  "📩 @angel_solt",
+  "https://t.me/angel_solt"
+].join("\\n");
 
-function keyboard() {
-  const rows = [];
-  for (let i = 0; i < SERVICES.length; i += 3) {
-    rows.push(SERVICES.slice(i, i + 3).map((text, off) => ({
-      text, callback_data: "angel_display_" + (i + off)
-    })));
-  }
-  rows.push([{text:"⭐ 솔루션 문의 · @angel_solt", callback_data:"angel_display_contact"}]);
-  return {inline_keyboard: rows};
-}
 async function telegram(token, method, payload) {
   const response = await fetch("https://api.telegram.org/bot" + token + "/" + method, {
     method: "POST", headers: {"content-type":"application/json"},
@@ -87,13 +81,6 @@ export default async function handler(req, res) {
     return res.status(403).json({ok:false,error:"Forbidden"});
   const update = req.body || {};
   try {
-    if (update.callback_query) {
-      // Display-only menu: Telegram requires callback_data, but do not
-      // navigate, open a popup, edit the message or perform any other action.
-      await telegram(token, "answerCallbackQuery", {
-        callback_query_id: update.callback_query.id
-      });
-    }
     // Private chat: forward a post from a private channel to identify its numeric chat ID.
     // Telegram may omit forward_origin when message forwarding attribution is hidden.
     if (update.message?.chat?.type === "private") {
@@ -117,7 +104,7 @@ export default async function handler(req, res) {
         await telegram(token,"sendMessage",{chat_id:m.chat.id,text:"👤 내 사용자 ID: " + m.from.id + "\n\n📣 비공개 채널 ID 확인: 봇을 채널 관리자로 추가한 뒤, 채널 게시물 하나를 이 봇 개인 채팅으로 전달하세요. 전달 출처가 숨겨져 있으면 채널 ID를 확인할 수 없습니다."});
       } else if (command === "/start" || command === "/menu") {
         await telegram(token,"sendMessage", {
-          chat_id:m.chat.id, text:MESSAGE, reply_markup:keyboard()
+          chat_id:m.chat.id, text:MESSAGE
         });
       } else if (command === "/myid") {
         await telegram(token,"sendMessage", {
@@ -132,7 +119,7 @@ export default async function handler(req, res) {
           await telegram(token,"sendMessage",{chat_id:m.chat.id,text:"ANGEL_CHANNEL_ID를 설정하세요."});
         } else {
           const posted = await telegram(token,"sendMessage",{
-            chat_id:channelId,text:MESSAGE,reply_markup:keyboard()
+            chat_id:channelId,text:MESSAGE
           });
           await telegram(token,"sendMessage",{
             chat_id:m.chat.id,text:"채널 게시 완료 (message_id: " + posted.message_id + ")"
