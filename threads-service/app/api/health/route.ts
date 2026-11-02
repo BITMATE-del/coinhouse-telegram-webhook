@@ -1,0 +1,1 @@
+export function GET(){return Response.json({ok:true,service:'차트포스트',status:'기본 화면 운영 중',publishing:false,payments:false})}

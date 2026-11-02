@@ -1,0 +1,1 @@
+export default function Login(){return <main className="wrap"><div className="card center"><span className="eyebrow">회원 전용</span><h2>로그인</h2><p>회원 인증 서버 연결 전입니다. 계정 정보는 아직 입력받지 않습니다.</p><span className="badgetop">인증 연결 준비 중</span><div className="actions"><a className="outline" href="/">홈으로</a><a className="outline" href="/signup">회원가입 안내</a></div></div></main>}

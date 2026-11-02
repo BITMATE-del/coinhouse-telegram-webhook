@@ -1,0 +1,1 @@
+export default function Signup(){return <main className="wrap"><div className="card center"><span className="eyebrow">이용 시작</span><h2>회원가입</h2><p>회원정보 보호를 위해 인증 데이터베이스 연결이 끝나면 가입을 활성화합니다.</p><span className="badgetop">가입 기능 준비 중</span><div className="actions"><a href="/" className="outline">홈으로 돌아가기</a></div></div></main>}
